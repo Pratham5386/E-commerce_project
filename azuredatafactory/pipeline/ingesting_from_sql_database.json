@@ -52,14 +52,7 @@
 						{
 							"name": "checking_for_new_data",
 							"type": "Script",
-							"dependsOn": [
-								{
-									"activity": "Lookup1",
-									"dependencyConditions": [
-										"Succeeded"
-									]
-								}
-							],
+							"dependsOn": [],
 							"policy": {
 								"timeout": "0.12:00:00",
 								"retry": 0,
@@ -77,7 +70,7 @@
 									{
 										"type": "Query",
 										"text": {
-											"value": "select * from @{item().name} \nwhere \nlast_updated_at > \n'@{activity('Lookup1').output.firstRow.last_updated_at}';",
+											"value": "select count(*) as newrows from @{item().name} \nwhere \nlast_updated_at > (\nselect last_updated_at from dbo.watermarkTable\nwhere tablename = '@{split(item().name,'.')[1]}_date')",
 											"type": "Expression"
 										}
 									}
@@ -88,6 +81,8 @@
 						{
 							"name": "Lookup1",
 							"type": "Lookup",
+							"state": "Inactive",
+							"onInactiveMarkAs": "Succeeded",
 							"dependsOn": [],
 							"policy": {
 								"timeout": "0.12:00:00",
@@ -108,12 +103,133 @@
 									"type": "DatasetReference",
 									"parameters": {
 										"table": {
-											"value": "@{split(item().name,'.' )[1]}_date",
+											"value": "watermarkTable",
 											"type": "Expression"
 										},
 										"schema": "dbo"
 									}
+								},
+								"firstRowOnly": true
+							}
+						},
+						{
+							"name": "checking_for_new_rows",
+							"type": "IfCondition",
+							"dependsOn": [
+								{
+									"activity": "checking_for_new_data",
+									"dependencyConditions": [
+										"Succeeded"
+									]
 								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"expression": {
+									"value": "@greater(activity('checking_for_new_data').output.resultSets[0].rows[0].newrows,0)",
+									"type": "Expression"
+								},
+								"ifTrueActivities": [
+									{
+										"name": "Copying data to datalake",
+										"type": "Copy",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "select * from @{item().name} \nwhere last_updated_at > (\n    select last_updated_at from dbo.watermarkTable\n    where tablename = '@{split(item().name,'.')[1]}_date')",
+													"type": "Expression"
+												},
+												"queryTimeout": "00:05:00",
+												"partitionOption": "None"
+											},
+											"sink": {
+												"type": "ParquetSink",
+												"storeSettings": {
+													"type": "AzureBlobFSWriteSettings"
+												},
+												"formatSettings": {
+													"type": "ParquetWriteSettings"
+												}
+											},
+											"enableStaging": false,
+											"translator": {
+												"type": "TabularTranslator",
+												"typeConversion": true,
+												"typeConversionSettings": {
+													"allowDataTruncation": true,
+													"treatBooleanAsNumber": false
+												}
+											}
+										},
+										"inputs": [
+											{
+												"referenceName": "AzureSqlTable1",
+												"type": "DatasetReference",
+												"parameters": {
+													"table": {
+														"value": "@split(item().name,'.' )[1]",
+														"type": "Expression"
+													},
+													"schema": {
+														"value": "@split(item().name,'.' )[0]",
+														"type": "Expression"
+													}
+												}
+											}
+										],
+										"outputs": [
+											{
+												"referenceName": "dy_parq_fold",
+												"type": "DatasetReference",
+												"parameters": {
+													"cont": "sqlsource",
+													"fold": {
+														"value": "@split(item().name,'.' )[1]",
+														"type": "Expression"
+													},
+													"file": {
+														"value": "@{split(item().name, '.')[0]}_@{formatDateTime(utcNow(), 'yyyyMMddHHmmss')}\n",
+														"type": "Expression"
+													}
+												}
+											}
+										]
+									},
+									{
+										"name": "Stored procedure1",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Copying data to datalake",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"linkedServiceName": {
+											"referenceName": "AzureSqlDatabase1",
+											"type": "LinkedServiceReference"
+										}
+									}
+								]
 							}
 						}
 					]
